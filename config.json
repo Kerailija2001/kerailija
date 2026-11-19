@@ -1,0 +1,15 @@
+{
+  "origins": ["HEL"],
+  "destinations": [
+    "BKK", "HKT", "SIN", "KUL", "DPS", "CGK", "SGN", "HAN", "MNL",
+    "DEL", "BOM", "BLR", "MAA", "HYD",
+    "NYC", "LAX", "MIA", "MEX", "CUN", "GIG", "GRU"
+  ],
+  "day_offsets": "1-120",
+  "trip_lengths": [10, 14],
+  "keep_per_search": 5,
+  "max_duration_hours": 24,
+  "currency": "EUR",
+  "language": "fi",
+  "sleep_seconds": 2.0
+}

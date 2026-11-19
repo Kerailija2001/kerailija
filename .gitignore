@@ -1,0 +1,11 @@
+# Paikallinen data - ei julkiseen repoon
+*.db
+*.db-journal
+*.csv
+alerts.log
+run.log
+__pycache__/
+_site/
+.env
+# Tunnukset - ei koskaan repoon
+tunnarit.txt

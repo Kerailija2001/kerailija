@@ -1,0 +1,103 @@
+name: flightwatch-keruu
+
+# Ajetaan joka yö noin klo 01:17 UTC (Suomessa 03:17 talvella, 04:17 kesällä).
+# GitHub voi viivästyttää ajastettuja ajoja tunteja tai jättää ne väliin ruuhkassa (etenkin
+# tasatunneilla), joten ajastuksia on kaksi. Myöhempi ohitetaan, jos päivän keruu on jo ajettu.
+on:
+  schedule:
+    - cron: "17 1 * * *"
+    - cron: "43 5 * * *"
+  workflow_dispatch:
+    inputs:
+      max_calls:
+        description: "Hakuja per osa (0 = kaikki)"
+        default: "0"
+
+concurrency:
+  group: flightwatch-keruu
+  cancel-in-progress: false
+
+env:
+  TURSO_DATABASE_URL: ${{ secrets.TURSO_DATABASE_URL }}
+  TURSO_AUTH_TOKEN: ${{ secrets.TURSO_AUTH_TOKEN }}
+  SMTP_HOST: ${{ secrets.SMTP_HOST }}
+  SMTP_PORT: ${{ secrets.SMTP_PORT }}
+  SMTP_USER: ${{ secrets.SMTP_USER }}
+  SMTP_PASS: ${{ secrets.SMTP_PASS }}
+  ALERT_TO: ${{ secrets.ALERT_TO }}
+
+jobs:
+  prepare:
+    runs-on: ubuntu-latest
+    permissions:
+      actions: read
+      contents: read
+    outputs:
+      ts: ${{ steps.ts.outputs.ts }}
+      skip: ${{ steps.skip.outputs.skip }}
+    steps:
+      - name: Onko tämän päivän keruu jo käynnistetty?
+        id: skip
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if [ "${{ github.event_name }}" != "schedule" ]; then
+            echo "skip=false" >> "$GITHUB_OUTPUT"; exit 0
+          fi
+          today=$(date -u +%Y-%m-%d)
+          n=$(gh api "repos/${{ github.repository }}/actions/workflows/collect.yml/runs?created=%3E%3D${today}&per_page=50" \
+            --jq "[.workflow_runs[] | select(.id != ${{ github.run_id }} and .event == \"schedule\" and .conclusion != \"cancelled\" and .conclusion != \"skipped\")] | length")
+          echo "Tänään aiemmin käynnistettyjä ajastettuja keruita: $n"
+          if [ "$n" -gt 0 ]; then echo "skip=true" >> "$GITHUB_OUTPUT"; else echo "skip=false" >> "$GITHUB_OUTPUT"; fi
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Tarkista asetukset
+        run: |
+          if [ -z "$TURSO_DATABASE_URL" ] || [ -z "$TURSO_AUTH_TOKEN" ]; then
+            echo "::error::Secrets TURSO_DATABASE_URL ja TURSO_AUTH_TOKEN puuttuvat (Settings > Secrets and variables > Actions)."
+            exit 1
+          fi
+      # Luo taulut kerran ennen rinnakkaisia osia
+      - name: Kantayhteys
+        run: python flightwatch.py --db-check
+      - name: Yhteinen aikaleima
+        id: ts
+        run: echo "ts=$(date -u +%Y-%m-%dT%H:%M:%S+00:00)" >> "$GITHUB_OUTPUT"
+
+  collect:
+    needs: prepare
+    if: needs.prepare.outputs.skip != 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 330
+    strategy:
+      fail-fast: false
+      # 10 osaa = 10 eri konetta ja IP-osoitetta, ~500 hakua kullakin (vähemmän rajoituksia)
+      matrix:
+        shard: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+      - run: pip install -r requirements.txt
+      - name: Keruu, osa ${{ matrix.shard }}/10
+        run: >
+          python flightwatch.py
+          --shard ${{ matrix.shard }}/10
+          --max-minutes 300
+          --max-calls ${{ github.event.inputs.max_calls || '0' }}
+          --collected-at ${{ needs.prepare.outputs.ts }}
+
+  # GitHub pysäyttää ajastuksen, jos julkisessa repossa ei ole tapahtunut mitään 60 päivään.
+  # Workflown uudelleen aktivointi API:lla pitää sen päällä ilman turhia committeja.
+  keepalive:
+    runs-on: ubuntu-latest
+    permissions:
+      actions: write
+    steps:
+      - run: gh api -X PUT "repos/${{ github.repository }}/actions/workflows/collect.yml/enable"
+        env:
+          GH_TOKEN: ${{ github.token }}

@@ -1,0 +1,376 @@
+<!doctype html>
+<html lang="fi">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex">
+<title>Lentohinnat</title>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+<style>
+  :root {
+    --bg: #f6f7f9; --card: #ffffff; --text: #1b1f24; --muted: #5f6b7a; --line: #e3e7ec;
+    --accent: #2563eb; --accent-soft: #dbe6fd; --good: #15803d; --bad: #b91c1c; --best: #16a34a;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #0f1216; --card: #171b21; --text: #e6e9ee; --muted: #9aa5b4; --line: #2a313a;
+      --accent: #6b9cff; --accent-soft: #1e2a44; --good: #4ade80; --bad: #f87171; --best: #4ade80;
+    }
+  }
+  * { box-sizing: border-box; }
+  html, body { overflow-x: hidden; }
+  .card { min-width: 0; }
+  body { margin: 0; background: var(--bg); color: var(--text);
+         font: 15px/1.45 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
+  main { max-width: 1100px; margin: 0 auto; padding: 20px 16px 60px; }
+  h1 { font-size: 22px; margin: 0 0 4px; }
+  h2 { font-size: 17px; margin: 0 0 12px; }
+  .muted { color: var(--muted); }
+  .small { font-size: 13px; }
+  .card { background: var(--card); border: 1px solid var(--line); border-radius: 10px;
+          padding: 16px; margin-top: 16px; }
+  table { width: 100%; border-collapse: collapse; }
+  th, td { text-align: left; padding: 8px 10px; border-bottom: 1px solid var(--line); vertical-align: top; }
+  th { font-size: 13px; color: var(--muted); font-weight: 600; cursor: default; white-space: nowrap; }
+  th.sort { cursor: pointer; }
+  th.sort:hover { color: var(--text); }
+  td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
+  tr.click { cursor: pointer; }
+  tr.click:hover td { background: var(--accent-soft); }
+  .price { font-weight: 650; font-variant-numeric: tabular-nums; }
+  .up { color: var(--bad); } .down { color: var(--good); }
+  .btns { display: flex; gap: 6px; flex-wrap: wrap; }
+  button { font: inherit; border: 1px solid var(--line); background: var(--card); color: var(--text);
+           border-radius: 7px; padding: 6px 12px; cursor: pointer; }
+  button.on { background: var(--accent); border-color: var(--accent); color: #fff; }
+  a { color: var(--accent); }
+  a.gf { text-decoration: none; white-space: nowrap; font-weight: 600; }
+  a.gf:hover { text-decoration: underline; }
+  .back { display: inline-block; margin-bottom: 8px; text-decoration: none; }
+  .head { display: flex; justify-content: space-between; align-items: flex-end; gap: 12px; flex-wrap: wrap; }
+  .chartbox { position: relative; height: 300px; }
+  .chartbox.small { height: 220px; }
+  .scroll { overflow-x: auto; }
+  .stat { display: flex; gap: 24px; flex-wrap: wrap; margin-top: 4px; }
+  .stat div b { display: block; font-size: 20px; }
+  .empty { padding: 30px 0; text-align: center; }
+  @media (max-width: 640px) { .hide-m { display: none; } th, td { padding: 7px 6px; } }
+</style>
+</head>
+<body>
+<main id="app"><p class="muted">Ladataan…</p></main>
+<script>
+const NAMES = {
+  HEL: "Helsinki", BKK: "Bangkok", HKT: "Phuket", KBV: "Krabi", USM: "Koh Samui", CNX: "Chiang Mai",
+  SIN: "Singapore", KUL: "Kuala Lumpur", DPS: "Bali", CGK: "Jakarta", SGN: "Ho Chi Minh City",
+  HAN: "Hanoi", DAD: "Da Nang", MNL: "Manila", CEB: "Cebu", DEL: "Delhi", BOM: "Mumbai",
+  BLR: "Bangalore", MAA: "Chennai", HYD: "Hyderabad", COK: "Kochi", CCU: "Kolkata",
+  NYC: "New York", JFK: "New York (JFK)", EWR: "New York (Newark)", LAX: "Los Angeles", MIA: "Miami",
+  MEX: "Mexico City", CUN: "Cancún", GIG: "Rio de Janeiro", GRU: "São Paulo", EZE: "Buenos Aires",
+  YYZ: "Toronto", SFO: "San Francisco", BOG: "Bogotá",
+};
+const WD = ["su", "ma", "ti", "ke", "to", "pe", "la"];
+const app = document.getElementById("app");
+let overview = null;
+const cache = {};
+let charts = [];
+let dayChart = null;
+let current = null;  // avoinna oleva kohdesivu
+
+const name = c => NAMES[c] || c;
+const eur = v => v == null ? "–" : Math.round(v).toLocaleString("fi-FI") + " €";
+const esc = s => String(s ?? "").replace(/[&<>"]/g, c => ({"&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;"}[c]));
+const pd = s => { const [y, m, d] = s.slice(0, 10).split("-").map(Number); return new Date(y, m - 1, d); };
+const fdate = s => { const d = pd(s); return `${WD[d.getDay()]} ${d.getDate()}.${d.getMonth() + 1}.`; };
+const fdateY = s => { const d = pd(s); return `${WD[d.getDay()]} ${d.getDate()}.${d.getMonth() + 1}.${d.getFullYear()}`; };
+const frun = s => { const d = new Date(s); return `${d.getDate()}.${d.getMonth() + 1}.`; };
+const tripLabel = k => k === "ow" ? "yhdensuuntainen" : `${k} pv`;
+const airl = a => (a || "?").split("+").join(" + ");
+// Google Flights: täsmähaku (tfs), tai tekstihaku jos tfs puuttuu
+const gfUrl = (tfs, o, d, out, ret) => tfs
+  ? `https://www.google.com/travel/flights?tfs=${encodeURIComponent(tfs)}&hl=fi&curr=EUR`
+  : "https://www.google.com/travel/flights?hl=fi&curr=EUR&q=" +
+    encodeURIComponent(`Flights to ${d} from ${o} on ${out}` + (ret ? ` through ${ret}` : " one way"));
+const dur = m => m ? `${Math.floor(m / 60)} h ${m % 60} min` : "–";
+const css = v => getComputedStyle(document.documentElement).getPropertyValue(v).trim();
+const tripsOf = r => Object.keys(r.trend).sort((a, b) => (a === "ow") - (b === "ow") || a - b);
+
+async function getJSON(url) {
+  if (!cache[url]) {
+    cache[url] = fetch(url, {cache: "no-cache"}).then(r => {
+      if (!r.ok) throw new Error(`${url}: HTTP ${r.status}`);
+      return r.json();
+    });
+  }
+  return cache[url];
+}
+
+// Aikasarjat kategoria-akselille: yksi merkintä per keruukerta
+function series(list) {
+  const runs = [...new Set(list.flatMap(pts => pts.map(p => p[0])))].sort();
+  return {labels: runs, data: list.map(pts => { const m = new Map(pts); return runs.map(r => m.has(r) ? m.get(r) : null); })};
+}
+const runAxis = labels => ({ticks: {callback: (v, i) => frun(labels[i]), maxTicksLimit: 10, maxRotation: 0}});
+
+function clearCharts() {
+  charts.forEach(c => c.destroy()); charts = [];
+  if (dayChart) { dayChart.destroy(); dayChart = null; }
+}
+
+function chartDefaults() {
+  Chart.defaults.color = css("--muted");
+  Chart.defaults.borderColor = css("--line");
+  Chart.defaults.font.family = getComputedStyle(document.body).fontFamily;
+}
+
+// Muutos: uusin hinta vs. hinta ~7 vrk aiemmin
+function change(trend) {
+  if (!trend || trend.length < 2) return null;
+  const last = trend[trend.length - 1];
+  const target = new Date(last[0]).getTime() - 7 * 864e5;
+  let ref = trend[0];
+  for (const p of trend) if (new Date(p[0]).getTime() <= target + 12 * 36e5) ref = p;
+  if (ref === last) ref = trend[trend.length - 2];
+  return last[1] - ref[1];
+}
+
+function chg(v) {
+  if (v == null) return '<span class="muted">–</span>';
+  if (Math.abs(v) < 1) return '<span class="muted">±0 €</span>';
+  return `<span class="${v > 0 ? "up" : "down"}">${v > 0 ? "+" : "−"}${Math.round(Math.abs(v))} €</span>`;
+}
+
+// ---------------------------------------------------------------- yleiskuva
+let sortBy = null;
+function renderOverview() {
+  clearCharts();
+  const routes = overview.routes;
+  const keys = Object.keys(routes);
+  if (!overview.latest || !keys.length) {
+    app.innerHTML = `<h1>Lentohinnat</h1><div class="card empty muted">Ei dataa vielä. Sivu päivittyy ensimmäisen keruun jälkeen.</div>`;
+    return;
+  }
+  const trips = [...new Set(keys.flatMap(k => tripsOf(routes[k])))]
+    .sort((a, b) => (a === "ow") - (b === "ow") || a - b);
+  const sk = sortBy || trips[0];
+  const val = (k, t) => routes[k].now[t]?.price ?? Infinity;
+  keys.sort(sk === "name" ? (a, b) => name(a.split("-")[1]).localeCompare(name(b.split("-")[1]), "fi")
+                          : (a, b) => val(a, sk) - val(b, sk));
+  const origins = [...new Set(keys.map(k => k.split("-")[0]))];
+
+  app.innerHTML = `
+    <div class="head"><div>
+      <h1>Lentohinnat ${origins.length === 1 ? "– lähtö " + esc(name(origins[0])) : ""}</h1>
+      <div class="muted small">Uusin keruu ${esc(fdateY(overview.latest))} · ${overview.n_runs} keruuta · menopaluun kokonaishinta, 1 aikuinen${overview.max_hours ? ` · menomatka enintään ${overview.max_hours} h` : ""}</div>
+    </div></div>
+    <div class="card scroll">
+      <h2>Halvimmat hinnat nyt</h2>
+      <table><thead><tr>
+        <th class="sort" data-s="name">Kohde</th>
+        ${trips.map(t => `<th class="sort num" data-s="${t}">${tripLabel(t)}${sk === t ? " ▲" : ""}</th>
+                          <th>Lähtö ja yhtiö</th><th class="num hide-m">7 vrk</th>`).join("")}
+      </tr></thead><tbody>
+      ${keys.map(k => {
+        const [o, d] = k.split("-");
+        const r = routes[k];
+        return `<tr class="click" data-r="${esc(k)}"><td><b>${esc(name(d))}</b> <span class="muted small">${esc(d)}${origins.length > 1 ? " ← " + esc(o) : ""}</span></td>
+          ${trips.map(t => {
+            const n = r.now[t];
+            return `<td class="num price">${n ? eur(n.price) : "–"}</td>
+                    <td class="small">${n ? `<a class="gf" href="${esc(gfUrl(n.tfs, o, d, n.out, n.ret))}" target="_blank" rel="noopener"
+                        title="Avaa haku Google Flightsissa">${esc(fdate(n.out))}${n.ret ? "–" + esc(fdate(n.ret).split(" ")[1]) : ""} ↗</a>
+                        <div class="muted">${esc(airl(n.airlines))}</div>` : ""}</td>
+                    <td class="num hide-m small">${chg(change(r.trend[t]))}</td>`;
+          }).join("")}</tr>`;
+      }).join("")}
+      </tbody></table>
+      <p class="muted small">Halvin hinta kaikista seuratuista lähtöpäivistä. "7 vrk" = muutos viikon takaisesta keruusta. Valitse kohde nähdäksesi hinnat päiväkohtaisesti.</p>
+    </div>
+    <div class="card"><h2>Halvimman hinnan kehitys</h2><div class="chartbox"><canvas id="trend"></canvas></div>
+      <p class="muted small">Jokaisen keruun halvin hinta per kohde (${tripLabel(trips[0])}). Klikkaa selitettä piilottaaksesi kohteita.</p></div>`;
+
+  app.querySelectorAll("th.sort").forEach(th => th.onclick = () => { sortBy = th.dataset.s; renderOverview(); });
+  app.querySelectorAll("tr.click").forEach(tr => tr.onclick = e => {
+    if (!e.target.closest("a")) location.hash = tr.dataset.r;
+  });
+
+  const palette = ["#2563eb", "#dc2626", "#16a34a", "#d97706", "#7c3aed", "#0891b2", "#db2777", "#65a30d",
+                   "#ea580c", "#4f46e5", "#0d9488", "#be123c", "#ca8a04", "#9333ea", "#0284c7", "#059669",
+                   "#c2410c", "#6d28d9", "#0e7490", "#a21caf", "#4d7c0f"];
+  chartDefaults();
+  const tk = keys.filter(k => routes[k].trend[trips[0]]);
+  const ts = series(tk.map(k => routes[k].trend[trips[0]]));
+  charts.push(new Chart(document.getElementById("trend"), {
+    type: "line",
+    data: {
+      labels: ts.labels,
+      datasets: tk.map((k, i) => ({
+        label: name(k.split("-")[1]),
+        data: ts.data[i], spanGaps: true,
+        borderColor: palette[i % palette.length], backgroundColor: palette[i % palette.length],
+        pointRadius: 2, borderWidth: 1.5, tension: 0.2,
+        hidden: i >= 6,
+      })),
+    },
+    options: {
+      maintainAspectRatio: false, interaction: {mode: "nearest", intersect: false},
+      scales: {
+        x: runAxis(ts.labels),
+        y: {ticks: {callback: v => eur(v)}},
+      },
+      plugins: {
+        legend: {position: "bottom", labels: {boxWidth: 10, boxHeight: 10}},
+        tooltip: {callbacks: {title: it => "Keruu " + frun(ts.labels[it[0].dataIndex]), label: it => `${it.dataset.label}: ${eur(it.parsed.y)}`}},
+      },
+    },
+  }));
+}
+
+// ---------------------------------------------------------------- kohdesivu
+async function renderRoute(route, trip, date) {
+  clearCharts();
+  const r = overview.routes[route];
+  if (!r) { location.hash = ""; return; }
+  const [o, d] = route.split("-");
+  const trips = tripsOf(r);
+  if (!trips.includes(trip)) trip = trips[0];
+  app.innerHTML = `<p class="muted">Ladataan…</p>`;
+  let latest, hist;
+  try {
+    [latest, hist] = await Promise.all([getJSON(`data/latest/${route}.json`), getJSON(`data/hist/${route}.json`)]);
+  } catch (e) {
+    app.innerHTML = `<div class="card">Datan lataus epäonnistui: ${esc(e.message)}</div>`;
+    return;
+  }
+
+  // Uusimman keruun rivit tälle matkan pituudelle, ryhmiteltynä lähtöpäivittäin
+  const tl = r => r[1] ? String(Math.round((pd(r[1]) - pd(r[0])) / 864e5)) : "ow";
+  const byDate = {};
+  for (const row of latest.rows) if (tl(row) === trip) (byDate[row[0]] ||= []).push(row);
+  const dates = Object.keys(byDate).sort();
+  const mins = dates.map(dd => Math.min(...byDate[dd].map(x => x[2])));
+  const best = mins.length ? Math.min(...mins) : null;
+  const cheapLimit = mins.length ? [...mins].sort((a, b) => a - b)[Math.floor(mins.length * 0.1)] : null;
+  if (!date || !byDate[date]) date = dates[mins.indexOf(best)];
+  const avg = mins.length ? mins.reduce((a, b) => a + b, 0) / mins.length : null;
+
+  app.innerHTML = `
+    <a class="back" href="#">← Kaikki kohteet</a>
+    <div class="head"><div>
+      <h1>${esc(name(o))} → ${esc(name(d))}</h1>
+      <div class="muted small">Keruu ${esc(fdateY(latest.run))} · ${dates.length} lähtöpäivää</div>
+    </div>
+    <div class="btns">${trips.map(t => `<button data-t="${t}" class="${t === trip ? "on" : ""}">${tripLabel(t)}</button>`).join("")}</div></div>
+    <div class="card">
+      <div class="stat">
+        <div><span class="muted small">Halvin</span><b>${eur(best)}</b></div>
+        <div><span class="muted small">Keskimäärin</span><b>${eur(avg)}</b></div>
+        <div><span class="muted small">Muutos 7 vrk</span><b>${chg(change(r.trend[trip]))}</b></div>
+      </div>
+    </div>
+    <div class="card"><h2>Halvin hinta lähtöpäivän mukaan</h2>
+      <div class="scroll"><div class="chartbox" style="min-width:${Math.max(600, dates.length * 7)}px"><canvas id="bydate"></canvas></div></div>
+      <p class="muted small">Klikkaa pylvästä nähdäksesi päivän lennot. Vihreä = halvimmat 10 %.</p></div>
+    <div class="card" id="day"></div>
+    <div class="card"><h2>Kohteen halvimman hinnan kehitys</h2><div class="chartbox small"><canvas id="rtrend"></canvas></div></div>`;
+
+  app.querySelectorAll("button[data-t]").forEach(b => b.onclick = () => { location.hash = `${route}/${b.dataset.t}`; });
+  chartDefaults();
+  const accent = css("--accent"), good = css("--best");
+  const colors = sel => dates.map((dd, i) => dd === sel ? css("--text") : mins[i] <= cheapLimit ? good : accent);
+  const c = new Chart(document.getElementById("bydate"), {
+    type: "bar",
+    data: {labels: dates, datasets: [{
+      data: mins,
+      backgroundColor: colors(date),
+      borderRadius: 2,
+    }]},
+    options: {
+      maintainAspectRatio: false,
+      onClick: (e, els) => { if (els.length) location.hash = `${route}/${trip}/${dates[els[0].index]}`; },
+      onHover: (e, els) => { e.native.target.style.cursor = els.length ? "pointer" : "default"; },
+      scales: {
+        x: {ticks: {callback: (v, i) => fdate(dates[i]), autoSkip: true, maxRotation: 0}},
+        y: {ticks: {callback: v => eur(v)}},
+      },
+      plugins: {legend: {display: false},
+        tooltip: {callbacks: {title: it => fdateY(dates[it[0].dataIndex]), label: it => eur(it.parsed.y)}}},
+    },
+  });
+  charts.push(c);
+  const rs = series([r.trend[trip] || []]);
+  charts.push(new Chart(document.getElementById("rtrend"), {
+    type: "line",
+    data: {labels: rs.labels, datasets: [{data: rs.data[0],
+      borderColor: accent, backgroundColor: accent, pointRadius: 3, tension: 0.2}]},
+    options: {maintainAspectRatio: false,
+      scales: {x: runAxis(rs.labels), y: {ticks: {callback: v => eur(v)}}},
+      plugins: {legend: {display: false}, tooltip: {callbacks: {title: it => "Keruu " + frun(rs.labels[it[0].dataIndex]), label: it => eur(it.parsed.y)}}}},
+  }));
+  current = {route, trip, byDate, hist, chart: c, colors, links: latest.links || {}};
+  renderDay(route, trip, date, byDate[date] || [], (hist[trip] || {})[date] || []);
+}
+
+function selectDate(date) {
+  const c = current;
+  if (!c.byDate[date]) return;
+  c.chart.data.datasets[0].backgroundColor = c.colors(date);
+  c.chart.update("none");
+  renderDay(c.route, c.trip, date, c.byDate[date], (c.hist[c.trip] || {})[date] || []);
+}
+
+function renderDay(route, trip, date, rows, h) {
+  if (dayChart) { dayChart.destroy(); dayChart = null; }
+  const box = document.getElementById("day");
+  if (!date) { box.innerHTML = `<p class="muted empty">Ei hintoja tälle matkan pituudelle uusimmassa keruussa.</p>`; return; }
+  const [o, d] = route.split("-");
+  const ret = rows[0] && rows[0][1];
+  const gf = gfUrl((current?.links || {})[`${date}|${ret || ""}`], o, d, date, ret);
+  rows = [...rows].sort((a, b) => a[2] - b[2]);
+  box.innerHTML = `
+    <div class="head"><h2>Lähtö ${esc(fdateY(date))}${ret ? " – paluu " + esc(fdateY(ret)) : ""}</h2>
+      <a href="${gf}" target="_blank" rel="noopener">Avaa Google Flightsissa ↗</a></div>
+    <div class="scroll"><table><thead><tr><th class="num">Hinta</th><th>Yhtiö</th><th class="num">Vaihtoja</th>
+      <th class="hide-m">Kesto (meno)</th><th class="hide-m">Menolennot</th></tr></thead><tbody>
+      ${rows.map(x => `<tr><td class="num price">${eur(x[2])}</td><td>${esc(airl(x[3]))}</td><td class="num">${x[4] ?? "–"}</td>
+        <td class="hide-m">${dur(x[5])}</td><td class="hide-m small">${esc((x[6] || "").replaceAll(",", ", "))}</td></tr>`).join("")}
+    </tbody></table></div>
+    <h2 style="margin-top:18px">Tämän päivän hinnan kehitys</h2>
+    ${h.length > 1 ? `<div class="chartbox small"><canvas id="dayhist"></canvas></div>`
+                   : `<p class="muted small">Historia näkyy, kun tästä lähtöpäivästä on useampi keruu.</p>`}`;
+  if (h.length > 1) {
+    const accent = css("--accent");
+    const hs = series([h]);
+    dayChart = (new Chart(document.getElementById("dayhist"), {
+      type: "line",
+      data: {labels: hs.labels, datasets: [{data: hs.data[0],
+        borderColor: accent, backgroundColor: accent, pointRadius: 3, tension: 0.15}]},
+      options: {maintainAspectRatio: false,
+        scales: {x: runAxis(hs.labels), y: {ticks: {callback: v => eur(v)}}},
+        plugins: {legend: {display: false}, tooltip: {callbacks: {title: it => "Keruu " + frun(hs.labels[it[0].dataIndex]), label: it => eur(it.parsed.y)}}}},
+    }));
+  }
+}
+
+// ---------------------------------------------------------------- reititys
+function route() {
+  const [r, t, d] = decodeURIComponent(location.hash.slice(1)).split("/");
+  if (r && d && current && current.route === r && current.trip === t) { selectDate(d); return; }
+  current = null;
+  if (r) renderRoute(r, t, d); else renderOverview();
+  window.scrollTo(0, 0);
+}
+
+(async () => {
+  try {
+    overview = await getJSON("data/overview.json");
+  } catch (e) {
+    app.innerHTML = `<div class="card">Datan lataus epäonnistui: ${esc(e.message)}</div>`;
+    return;
+  }
+  window.addEventListener("hashchange", route);
+  route();
+})();
+</script>
+</body>
+</html>

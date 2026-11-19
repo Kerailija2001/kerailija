@@ -1,0 +1,49 @@
+name: flightwatch-sivu
+
+# Rakentaa hintasivun Turso-kannasta ja julkaisee sen GitHub Pagesiin.
+# Ajetaan automaattisesti keruun (tai testiajon) jälkeen, ja käsin: Actions > flightwatch-sivu > Run workflow.
+# Vaatii kerran: Settings > Pages > Build and deployment > Source: GitHub Actions.
+on:
+  workflow_run:
+    workflows: [flightwatch-keruu, flightwatch-testi]
+    types: [completed]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: flightwatch-sivu
+  cancel-in-progress: true
+
+jobs:
+  build-deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    environment:
+      name: github-pages
+      url: ${{ steps.deploy.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+      - run: pip install -r requirements.txt  # Google Flights -linkit
+      - name: Rakenna sivu
+        env:
+          TURSO_DATABASE_URL: ${{ secrets.TURSO_DATABASE_URL }}
+          TURSO_AUTH_TOKEN: ${{ secrets.TURSO_AUTH_TOKEN }}
+        run: |
+          if [ -z "$TURSO_DATABASE_URL" ]; then
+            echo "::error::Secret TURSO_DATABASE_URL puuttuu."
+            exit 1
+          fi
+          python site_build.py --out _site
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: _site
+      - id: deploy
+        uses: actions/deploy-pages@v4

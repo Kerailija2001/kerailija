@@ -1,0 +1,43 @@
+name: flightwatch-testi
+
+# Käynnistetään käsin: Actions > flightwatch-testi > Run workflow.
+# Tarkistaa kantayhteyden, yhden Google-haun ja tekee pienen koekeruun.
+on:
+  workflow_dispatch:
+    inputs:
+      max_calls:
+        description: "Koekeruun hakujen määrä"
+        default: "30"
+
+env:
+  TURSO_DATABASE_URL: ${{ secrets.TURSO_DATABASE_URL }}
+  TURSO_AUTH_TOKEN: ${{ secrets.TURSO_AUTH_TOKEN }}
+  SMTP_HOST: ${{ secrets.SMTP_HOST }}
+  SMTP_PORT: ${{ secrets.SMTP_PORT }}
+  SMTP_USER: ${{ secrets.SMTP_USER }}
+  SMTP_PASS: ${{ secrets.SMTP_PASS }}
+  ALERT_TO: ${{ secrets.ALERT_TO }}
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: pip install -r requirements.txt
+      - name: 1. Kantayhteys
+        run: |
+          if [ -z "$TURSO_DATABASE_URL" ] || [ -z "$TURSO_AUTH_TOKEN" ]; then
+            echo "::error::Secrets TURSO_DATABASE_URL ja TURSO_AUTH_TOKEN puuttuvat."
+            exit 1
+          fi
+          python flightwatch.py --db-check
+      - name: 2. Yksi Google-haku (menopaluu)
+        run: python flightwatch.py --test-route HEL-BKK
+      - name: 3. Koekeruu
+        run: python flightwatch.py --max-calls ${{ github.event.inputs.max_calls || '30' }}
+      - name: 4. Tulokset
+        run: python flightwatch.py --summary
