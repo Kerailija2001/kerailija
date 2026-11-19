@@ -92,6 +92,28 @@ def aggregate(conn, max_min):
     return latest
 
 
+FULL_RUN_SHARE = 0.5  # keruu on täysi, jos siinä on vähintään puolet lähiaikojen suurimmasta
+FULL_RUN_WINDOW = 7   # verrataan näin moneen viimeisimpään keruuseen (sen omaan mukaan lukien)
+
+
+def full_runs(conn):
+    """Keruut aikajärjestyksessä ilman vajaita (koekeruut, pahasti kesken jääneet), jotta
+    ne eivät korvaa etusivun hintoja eivätkä näy hintakehityksessä hyppyinä. Vertailu tehdään
+    lähiaikojen keruisiin, joten kohteiden lisääminen ei hylkää vanhoja keruita."""
+    counts = conn.execute(
+        "SELECT r.collected_at, COUNT(f.collected_at) FROM runs r "
+        "LEFT JOIN fare_min f ON f.collected_at = r.collected_at "
+        "GROUP BY r.collected_at ORDER BY r.collected_at").fetchall()
+    full = []
+    for i, (run, n) in enumerate(counts):
+        window = [c for _, c in counts[max(0, i - FULL_RUN_WINDOW + 1):i + 1]]
+        if n and n >= FULL_RUN_SHARE * max(window):
+            full.append(run)
+        else:
+            print(f"Vajaa keruu ohitetaan: {run} ({n} hakua, lähiaikojen suurin {max(window)})")
+    return full
+
+
 def write_json(path, obj):
     os.makedirs(os.path.dirname(path), exist_ok=True)
     with open(path, "w", encoding="utf-8") as f:
@@ -115,7 +137,9 @@ def build(conn, out, max_min, active=None):
         print("Ei dataa vielä - tyhjä sivu rakennettu.")
         return
 
-    runs = [r[0] for r in conn.execute("SELECT collected_at FROM runs ORDER BY collected_at")]
+    runs = full_runs(conn)
+    latest = runs[-1] if runs else latest
+    full = set(runs)
     hist_from = runs[-HISTORY_RUNS] if len(runs) >= HISTORY_RUNS else runs[0]
 
     # Yleiskuva: halvin per kohde ja matkan pituus jokaisesta keruusta (pieni taulu)
@@ -125,6 +149,8 @@ def build(conn, out, max_min, active=None):
             "FROM dest_min ORDER BY collected_at"):
         if active is not None and f"{o}-{d}" not in active:
             continue  # kohde poistettu seurannasta (data säilyy kannassa)
+        if run not in full:
+            continue
         r = routes.setdefault(f"{o}-{d}", {"trend": {}, "now": {}})
         k = trip_key(n)
         r["trend"].setdefault(k, []).append([run, price])
@@ -155,6 +181,8 @@ def build(conn, out, max_min, active=None):
                 "SELECT collected_at, outbound_date, trip_len, price FROM fare_min "
                 "WHERE origin = ? AND destination = ? AND collected_at >= ? ORDER BY collected_at",
                 (o, d, hist_from)):
+            if run not in full:
+                continue
             hist.setdefault(trip_key(n), {}).setdefault(out_date, []).append([run, price])
         write_json(os.path.join(out, "data", "hist", f"{route}.json"), hist)
 
