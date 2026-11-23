@@ -5,7 +5,7 @@
     "DEL", "BOM", "BLR", "MAA", "HYD",
     "NYC", "LAX", "MIA", "MEX", "CUN", "GIG", "GRU"
   ],
-  "day_offsets": "1-120",
+  "day_offsets": "15-120",
   "trip_lengths": [10, 14],
   "keep_per_search": 5,
   "max_duration_hours": 24,
